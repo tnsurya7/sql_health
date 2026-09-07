@@ -22,12 +22,19 @@ export const Register: React.FC = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
       });
-      const json = await res.json();
-      if (json.success) {
+
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        throw new Error("Cannot connect to backend server. Please verify the backend is running on port 5001.");
+      }
+
+      if (json && json.success) {
         setAuth(json.data.token, json.data.user);
         navigate("/dashboard");
       } else {
-        setError(json.error?.message || "Failed to register.");
+        setError(json?.error?.message || "Failed to register.");
       }
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred.");

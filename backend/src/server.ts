@@ -4,10 +4,14 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import pino from "pino";
 import pinoPretty from "pino-pretty";
+import path from "path";
 import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
 
-dotenv.config({ path: "../.env" });
+// Robust cross-platform environment variable resolution
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
+dotenv.config();
 
 const logger = pino(
   pinoPretty({
@@ -100,7 +104,14 @@ async function main() {
       logger.info(`Server running on http://localhost:${PORT}`);
     });
   } catch (error) {
-    logger.error("Failed to connect to database:", error);
+    logger.error("❌ Failed to connect to PostgreSQL database:");
+    logger.error(error);
+    console.error("\n👉 TROUBLESHOOTING GUIDANCE:");
+    console.error("1. Ensure PostgreSQL service is running:");
+    console.error("   - Windows: Open 'services.msc' -> postgresql service -> click Start");
+    console.error("   - Mac: brew services start postgresql");
+    console.error("2. Check DATABASE_URL in your .env file matches your PostgreSQL credentials.");
+    console.error("3. Run 'npm run db:push' to synchronize your database tables.\n");
     process.exit(1);
   }
 }
