@@ -96,14 +96,16 @@ npm -v
 
 Copy the example environment file into `.env`:
 
-### On Windows (PowerShell):
-```powershell
-Copy-Item .env.example .env
+### On Windows (CMD / PowerShell):
+```cmd
+copy .env.example .env
+copy .env.example backend\.env
 ```
 
 ### On macOS / Linux:
 ```bash
 cp .env.example .env
+cp .env.example backend/.env
 ```
 
 Open the `.env` file in the root folder and configure:
