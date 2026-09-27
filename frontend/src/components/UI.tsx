@@ -98,27 +98,48 @@ export const MetricCard: React.FC<{
 };
 
 // ScoreRing (Circular Animated Progress)
-export const ScoreRing: React.FC<{ score: number; size?: number; strokeWidth?: number; label?: string }> = ({
+export const ScoreRing: React.FC<{
+  score: number;
+  size?: number;
+  strokeWidth?: number;
+  label?: string;
+  sublabel?: string;
+}> = ({
   score,
-  size = 120,
+  size = 130,
   strokeWidth = 10,
-  label = "Health"
+  label,
+  sublabel = "/ 100",
 }) => {
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;
-  const strokeDashoffset = circumference - (score / 100) * circumference;
+  const clampedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const strokeDashoffset = circumference - (clampedScore / 100) * circumference;
 
-  let color = "stroke-emerald-500";
-  if (score < 60) color = "stroke-red-500";
-  else if (score < 80) color = "stroke-amber-500";
+  let strokeColor = "stroke-emerald-400";
+  let glowColor = "rgba(52, 211, 153, 0.25)";
+  if (clampedScore < 60) {
+    strokeColor = "stroke-rose-500";
+    glowColor = "rgba(244, 63, 94, 0.25)";
+  } else if (clampedScore < 80) {
+    strokeColor = "stroke-amber-400";
+    glowColor = "rgba(251, 191, 36, 0.25)";
+  } else if (clampedScore < 90) {
+    strokeColor = "stroke-cyan-400";
+    glowColor = "rgba(6, 182, 212, 0.25)";
+  }
 
   return (
     <div className="flex flex-col items-center justify-center">
       <div className="relative" style={{ width: size, height: size }}>
-        <svg className="w-full h-full transform -rotate-90" viewBox={`0 0 ${size} ${size}`}>
-          {/* Background circle */}
+        <svg
+          className="w-full h-full transform -rotate-90 filter"
+          style={{ filter: `drop-shadow(0 0 6px ${glowColor})` }}
+          viewBox={`0 0 ${size} ${size}`}
+        >
+          {/* Background track circle */}
           <circle
-            className="stroke-zinc-800"
+            className="stroke-zinc-850"
             fill="transparent"
             strokeWidth={strokeWidth}
             r={radius}
@@ -127,7 +148,7 @@ export const ScoreRing: React.FC<{ score: number; size?: number; strokeWidth?: n
           />
           {/* Progress circle */}
           <circle
-            className={`${color} transition-all duration-1000 ease-out`}
+            className={`${strokeColor} transition-all duration-1000 ease-out`}
             fill="transparent"
             strokeWidth={strokeWidth}
             strokeDasharray={circumference}
@@ -138,10 +159,25 @@ export const ScoreRing: React.FC<{ score: number; size?: number; strokeWidth?: n
             cy={size / 2}
           />
         </svg>
-        {/* Inside Label */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          <span className="text-3xl font-extrabold text-white font-mono">{score}</span>
-          <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider mt-0.5">{label}</span>
+
+        {/* Inside Score & Sublabel */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-2 select-none">
+          <span
+            className={`font-black text-white font-mono tracking-tight leading-none ${
+              size >= 130 ? "text-3xl" : size >= 110 ? "text-2xl" : "text-xl"
+            }`}
+          >
+            {clampedScore}
+          </span>
+          {label ? (
+            <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider mt-1 line-clamp-1">
+              {label}
+            </span>
+          ) : (
+            <span className="text-[10px] font-mono text-zinc-500 font-semibold mt-0.5">
+              {sublabel}
+            </span>
+          )}
         </div>
       </div>
     </div>

@@ -17,22 +17,31 @@ model User {
 }
 
 model DatabaseConnection {
-  id         String   @id @default(uuid())
-  name       String
-  host       String
-  port       Int
-  database   String
-  username   String
-  password   String
-  isActive   Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id              String   @id @default(uuid())
+  name            String
+  databaseType    String   @default("postgresql") // postgresql, mysql, oracle, sqlserver
+  host            String
+  port            Int
+  database        String
+  schema          String   @default("public")
+  username        String
+  password        String   // Encrypted at application level (AES-256-GCM)
+  ssl             Boolean  @default(false)
+  readOnly        Boolean  @default(true)
+  isActive        Boolean  @default(false)
+  status          String   @default("DISCONNECTED") // ONLINE, DISCONNECTED, ERROR, TIMEOUT, AUTH_FAILED
+  lastCheckedAt   DateTime?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  queries           SqlQuery[]
-  metadata          DatabaseMetadata[]
-  recommendations   Recommendation[]
-  healthScores      HealthScore[]
-  performanceMetrics PerformanceMetric[]
+  queries             SqlQuery[]
+  metadata            DatabaseMetadata[]
+  recommendations     Recommendation[]
+  healthScores        HealthScore[]
+  performanceMetrics  PerformanceMetric[]
+  deadlockLogs        DeadlockLog[]
+  optimizationRuns    OptimizationRun[]
 }
 
 model DatabaseMetadata {
@@ -75,6 +84,7 @@ model ColumnMetadata {
   fkRefTable String?
   fkRefCol   String?
   defaultVal String?
+  distinctValues Int?
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
 
@@ -90,6 +100,7 @@ model IndexMetadata {
   columns     String[]
   isUnique    Boolean       @default(false)
   isPrimary   Boolean       @default(false)
+  indexType   String        @default("BTREE") // BTREE, HASH, GIN, GIST
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -102,6 +113,7 @@ model SqlQuery {
   connection   DatabaseConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   rawSql       String
   formattedSql String?
+  fingerprint  String?
   score        Int                @default(100)
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
@@ -110,6 +122,23 @@ model SqlQuery {
   benchmarks     PerformanceMetric[]
   optimizations  OptimizationResult[]
   history        QueryHistory[]
+  optimizationRuns OptimizationRun[]
+}
+
+model QueryFingerprint {
+  id             String   @id @default(uuid())
+  fingerprint    String   @unique
+  normalizedSql  String
+  databaseType   String   @default("postgresql")
+  executionCount Int      @default(1)
+  avgLatencyMs   Float    @default(0)
+  minLatencyMs   Float    @default(0)
+  maxLatencyMs   Float    @default(0)
+  p95LatencyMs   Float    @default(0)
+  p99LatencyMs   Float    @default(0)
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model QueryAnalysis {
@@ -132,7 +161,7 @@ model QueryIssue {
   id             String        @id @default(uuid())
   analysisId     String
   analysis       QueryAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  ruleId         String
+  ruleId         String        // R001 to R025
   title          String
   description    String
   severity       String        // CRITICAL, HIGH, MEDIUM, LOW, INFO
@@ -140,17 +169,25 @@ model QueryIssue {
   evidence       String
   recommendation String
   confidence     Float
+  affectedTables String[]      @default([])
+  affectedColumns String[]     @default([])
+  databaseType   String        @default("postgresql")
   createdAt      DateTime      @default(now())
 }
 
 model ExecutionPlan {
-  id           String        @id @default(uuid())
-  analysisId   String
-  analysis     QueryAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
-  planJson     String        // JSON execution plan string
-  planningTime Float?
+  id            String        @id @default(uuid())
+  analysisId    String
+  analysis      QueryAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  planJson      String        // JSON execution plan string
+  planningTime  Float?
   executionTime Float?
-  createdAt    DateTime      @default(now())
+  totalCost     Float?
+  planRows      Float?
+  actualRows    Float?
+  cardinalityErrorRatio Float?
+  expensiveNodes String?      // JSON summary of bottleneck nodes
+  createdAt     DateTime      @default(now())
 }
 
 model OptimizationResult {
@@ -164,17 +201,52 @@ model OptimizationResult {
   createdAt      DateTime  @default(now())
 }
 
+model OptimizationRun {
+  id                  String   @id @default(uuid())
+  queryId             String?
+  query               SqlQuery? @relation(fields: [queryId], references: [id], onDelete: SetNull)
+  connectionId        String?
+  connection          DatabaseConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  originalSql         String
+  databaseType        String   @default("postgresql")
+  selectedCandidateId String?
+  summary             String?
+  status              String   @default("COMPLETED")
+  createdAt           DateTime @default(now())
+
+  candidates          OptimizationCandidateRecord[]
+}
+
+model OptimizationCandidateRecord {
+  id                   String          @id @default(uuid())
+  runId                String
+  run                  OptimizationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  candidateSql         String
+  source               String          // RULE_ENGINE, RELATIONAL_ALGEBRA, DP_JOIN, INDEX_ADVISOR, GEMINI_RAG
+  changes              String          // JSON array of changes
+  estimatedCost        Float?
+  actualLatencyMs      Float?
+  isValid              Boolean         @default(false)
+  validationReport     String?         // JSON validation output
+  benchmarkImprovement Float?          // Measured speedup %
+  isWinner             Boolean         @default(false)
+  createdAt            DateTime        @default(now())
+}
+
 model Recommendation {
   id           String             @id @default(uuid())
   connectionId String
   connection   DatabaseConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   category     String             // PERFORMANCE, SECURITY, INDEXES, QUALITY, MAINTAINABILITY, DESIGN
   severity     String             // CRITICAL, HIGH, MEDIUM, LOW, INFO
+  source       String             @default("ALGORITHMIC_RULE") // ALGORITHMIC_RULE, INDEX_ADVISOR, CBO, RAG, AI, MONITORING
   status       String             @default("NEW") // NEW, REVIEWED, ACCEPTED, REJECTED, APPLIED
   title        String
   description  String
   evidence     String?
   suggestedSql String?
+  priority     Int                @default(1)
+  confidence   Float              @default(1.0)
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 }
@@ -190,6 +262,8 @@ model PerformanceMetric {
   maxTimeMs    Float
   avgTimeMs    Float
   medianTimeMs Float
+  p95TimeMs    Float?
+  stdDevMs     Float?
   planningTime Float?
   cost         Float?
   rowsProcessed Int?
@@ -208,7 +282,45 @@ model HealthScore {
   scoreSchema  Int
   scoreQuery   Int
   scoreOver    Int
+  dimensions   String?            // JSON dimension breakdown & weighting
   createdAt    DateTime           @default(now())
+}
+
+model DeadlockLog {
+  id           String             @id @default(uuid())
+  connectionId String
+  connection   DatabaseConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  cycleDetails String             // JSON details of wait-for cycle
+  resolved     Boolean            @default(false)
+  detectedAt   DateTime           @default(now())
+}
+
+model OptimizationDocument {
+  id           String              @id @default(uuid())
+  title        String
+  category     String              // INDEXING, SARGABILITY, JOINS, CARDINALITY, REWRITE, SECURITY
+  databaseType String              @default("ALL") // ALL, postgresql, mysql, oracle, sqlserver
+  source       String
+  version      String              @default("1.0")
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  chunks       OptimizationChunk[]
+}
+
+model OptimizationChunk {
+  id             String               @id @default(uuid())
+  documentId     String
+  document       OptimizationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  title          String
+  content        String
+  keywords       String[]             @default([])
+  databaseType   String               @default("ALL")
+  category       String
+  retrievalCount Int                  @default(0)
+  embedding      String?              // Vector / JSON embedding representation
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 }
 
 model QueryHistory {

@@ -86,17 +86,26 @@ const BaseAnalyzer: React.FC<AnalyzerProps> = ({ objectType, title, defaultCode 
         <div className="space-y-6">
           <GlassCard className="flex flex-col items-center justify-center text-center">
             <h3 className="text-sm font-semibold text-white mb-6">Object Quality Rating</h3>
-            <ScoreRing score={result ? result.scores.overall : 100} size={130} strokeWidth={10} label="Score" />
-            
+            <ScoreRing
+              score={result?.scores?.overall ?? result?.overall ?? 100}
+              size={130}
+              strokeWidth={10}
+              label="Score"
+            />
+
             {result && (
               <div className="grid grid-cols-2 gap-4 w-full mt-6 pt-6 border-t border-zinc-800 text-xs">
                 <div>
                   <p className="text-[10px] uppercase font-bold text-zinc-500">Performance</p>
-                  <p className="text-sm font-mono font-bold text-white">{result.scores.performance}/100</p>
+                  <p className="text-sm font-mono font-bold text-white">
+                    {result?.scores?.performance ?? result?.scorePerf ?? 100}/100
+                  </p>
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold text-zinc-500">Maintainability</p>
-                  <p className="text-sm font-mono font-bold text-white">{result.scores.maintainability}/100</p>
+                  <p className="text-sm font-mono font-bold text-white">
+                    {result?.scores?.maintainability ?? result?.scoreMaint ?? 100}/100
+                  </p>
                 </div>
               </div>
             )}
@@ -105,7 +114,7 @@ const BaseAnalyzer: React.FC<AnalyzerProps> = ({ objectType, title, defaultCode 
           <GlassCard className="max-h-[300px] overflow-y-auto">
             <h3 className="text-sm font-semibold text-white mb-4">Inspection Issues</h3>
             <div className="space-y-3">
-              {result && result.issues.length > 0 ? (
+              {result && Array.isArray(result.issues) && result.issues.length > 0 ? (
                 result.issues.map((i: any, idx: number) => (
                   <div key={idx} className="p-3 bg-zinc-900 border border-zinc-800 rounded-lg">
                     <h4 className="text-xs font-semibold text-white">{i.title}</h4>

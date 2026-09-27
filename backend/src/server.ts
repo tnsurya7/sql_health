@@ -23,13 +23,13 @@ const logger = pino(
 export const prisma = new PrismaClient();
 
 const app = express();
-const PORT = process.env.BACKEND_PORT || 5001;
+const PORT = process.env.BACKEND_PORT || process.env.PORT || 5001;
 
 // Security Middleware
 app.use(helmet());
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     credentials: true,
   })
 );
@@ -37,7 +37,7 @@ app.use(
 // Rate Limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Limit each IP to 1000 requests per windowMs
+  max: 2000,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -51,11 +51,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
-app.get("/api/health", (req, res) => {
-  res.status(200).json({ success: true, status: "OK", timestamp: new Date() });
-});
-
 // Import Routers
 import authRouter from "./routes/auth";
 import dbRouter from "./routes/db";
@@ -63,10 +58,22 @@ import sqlRouter from "./routes/sql";
 import schemaRouter from "./routes/schema";
 import dashboardRouter from "./routes/dashboard";
 import queriesRouter from "./routes/queries";
-import analysisRouter from "./routes/analysis";
+import analysisRouter, {
+  proceduresRouter,
+  viewsRouter,
+  functionsRouter,
+  triggersRouter,
+} from "./routes/analysis";
 import recommendationsRouter from "./routes/recommendations";
 import performanceRouter from "./routes/performance";
+import indexAdvisorRouter from "./routes/index-advisor";
+import deadlocksRouter from "./routes/deadlocks";
+import healthRouter from "./routes/health";
+import ragRouter from "./routes/rag";
 import searchRouter from "./routes/search";
+
+import { connectionManager } from "./database/connection-manager";
+import { RagService } from "./services/rag/rag-service";
 
 // Register Routers
 app.use("/api/auth", authRouter);
@@ -77,11 +84,16 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/queries", queriesRouter);
 app.use("/api/recommendations", recommendationsRouter);
 app.use("/api/performance", performanceRouter);
+app.use("/api/index-advisor", indexAdvisorRouter);
+app.use("/api/deadlocks", deadlocksRouter);
+app.use("/api/health", healthRouter);
+app.use("/api/rag", ragRouter);
 app.use("/api/search", searchRouter);
-app.use("/api/procedures", analysisRouter);
-app.use("/api/views", analysisRouter);
-app.use("/api/functions", analysisRouter);
-app.use("/api/triggers", analysisRouter);
+app.use("/api/procedures", proceduresRouter);
+app.use("/api/views", viewsRouter);
+app.use("/api/functions", functionsRouter);
+app.use("/api/triggers", triggersRouter);
+app.use("/api", analysisRouter);
 
 // Global error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -98,20 +110,21 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 async function main() {
   try {
     await prisma.$connect();
-    logger.info("Connected to PostgreSQL via Prisma successfully.");
+    logger.info("Connected to PostgreSQL application database via Prisma successfully.");
+
+    // Initialize configured database connections and RAG knowledge store
+    await connectionManager.initializeConnections();
+    await RagService.seedIfEmpty();
 
     app.listen(PORT, () => {
-      logger.info(`Server running on http://localhost:${PORT}`);
+      logger.info(`SQLSense AI Backend running on http://localhost:${PORT}`);
     });
-  } catch (error) {
-    logger.error("❌ Failed to connect to PostgreSQL database:");
-    logger.error(error);
-    console.error("\n👉 TROUBLESHOOTING GUIDANCE:");
-    console.error("1. Ensure PostgreSQL service is running:");
-    console.error("   - Windows: Open 'services.msc' -> postgresql service -> click Start");
-    console.error("   - Mac: brew services start postgresql");
-    console.error("2. Check DATABASE_URL in your .env file matches your PostgreSQL credentials.");
-    console.error("3. Run 'npm run db:push' to synchronize your database tables.\n");
+  } catch (error: any) {
+    logger.error("Failed to connect to application PostgreSQL database:", error.message);
+    console.error("\nTROUBLESHOOTING GUIDANCE:");
+    console.error("1. Ensure PostgreSQL is running locally.");
+    console.error("2. Check APP_DATABASE_URL or DATABASE_URL in your .env file.");
+    console.error("3. Run 'npm run db:push' to sync application schema.\n");
     process.exit(1);
   }
 }

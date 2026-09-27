@@ -15,16 +15,23 @@ import {
   Zap,
   TrendingDown,
   FileCode,
-  ShieldCheck
+  ShieldCheck,
+  PowerOff,
+  ArrowRight,
+  Server
 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { useAppStore } from "../../store";
 
 export const Dashboard: React.FC = () => {
+  const { activeConnection } = useAppStore();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchDashboardData = async () => {
     try {
-      const res = await fetch("/api/dashboard", {
+      const url = activeConnection ? `/api/dashboard?connectionId=${activeConnection.id}` : "/api/dashboard";
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }
       });
       const json = await res.json();
@@ -40,7 +47,7 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [activeConnection]);
 
   if (loading) {
     return (
@@ -50,7 +57,7 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  const { kpis, healthScore, charts, recentRecommendations, connectionName } = data || {};
+  const { kpis, healthScore, charts, recentRecommendations, connectionName, isConnected, status, databaseType } = data || {};
 
   // ECharts Theme Settings
   const lineChartOption = {
@@ -115,25 +122,129 @@ export const Dashboard: React.FC = () => {
     <div className="space-y-8">
       <PageHeader
         title="Database Intelligence"
-        subtitle={`Understand, optimize, and monitor database performance. Connected to: ${connectionName}`}
+        subtitle={`Real-time SQL observability, execution plan telemetry, and algorithmic optimization. Target: ${connectionName || "No Database Connected"}`}
         action={
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-cyan-500/10 text-cyan-400 text-xs border border-cyan-500/20">
-            <Zap className="w-3.5 h-3.5" />
-            Live Observing
-          </span>
+          isConnected ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs border border-emerald-500/20 font-mono font-bold">
+              <Zap className="w-3.5 h-3.5" />
+              ONLINE ({databaseType?.toUpperCase()})
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-800 text-zinc-400 text-xs border border-zinc-700">
+              <PowerOff className="w-3.5 h-3.5" />
+              DISCONNECTED
+            </span>
+          )
         }
       />
 
-      {/* Health score gauges */}
-      <GlassCard className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-6 justify-center text-center">
-        <ScoreRing score={healthScore?.overall || 0} size={100} strokeWidth={8} label="Overall" />
-        <ScoreRing score={healthScore?.performance || 0} size={85} strokeWidth={6} label="Performance" />
-        <ScoreRing score={healthScore?.security || 0} size={85} strokeWidth={6} label="Security" />
-        <ScoreRing score={healthScore?.maintainability || 0} size={85} strokeWidth={6} label="Maintainability" />
-        <ScoreRing score={healthScore?.indexHealth || 0} size={85} strokeWidth={6} label="Index Health" />
-        <ScoreRing score={healthScore?.schemaQuality || 0} size={85} strokeWidth={6} label="Schema" />
-        <ScoreRing score={healthScore?.queryQuality || 0} size={85} strokeWidth={6} label="Queries" />
-      </GlassCard>
+      {/* Disconnected Notice Banner */}
+      {!isConnected && (
+        <GlassCard className="border border-zinc-800 bg-zinc-900/60 p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="space-y-1 text-center md:text-left">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2 justify-center md:justify-start">
+              <Server className="w-4 h-4 text-cyan-400" />
+              No Live Target Database Connected
+            </h3>
+            <p className="text-xs text-zinc-400 max-w-xl">
+              Connect to your local or remote database to inspect live schemas, extract real EXPLAIN plans, calculate actual health scores, and run benchmarks.
+            </p>
+          </div>
+          <Link
+            to="/settings"
+            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-white font-semibold text-xs rounded-lg transition flex items-center gap-2 shrink-0 shadow-lg shadow-cyan-500/20"
+          >
+            Connect Database <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+        </GlassCard>
+      )}
+
+      {/* Health score gauges - prominent, large, and clearly visible cards */}
+      {healthScore && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              Target Database Health Evaluation
+            </h3>
+            <span className="text-[11px] font-mono text-zinc-500">
+              Grade {healthScore.grade} • Weighted Multi-Dimensional Model
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
+            {/* Card 1: Overall Score */}
+            <GlassCard className="p-5 flex flex-col items-center justify-between text-center border-cyan-500/30 bg-cyan-500/5 shadow-xl shadow-cyan-950/20">
+              <div className="w-full flex justify-between items-center pb-2 border-b border-cyan-500/20 mb-2">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Overall Score</span>
+                <span className="text-[10px] font-bold uppercase font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Grade {healthScore.grade}
+                </span>
+              </div>
+              <div className="py-2">
+                <ScoreRing score={healthScore.overall} size={135} strokeWidth={10} sublabel="Overall" />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-2 font-medium">Deterministic Global Health</p>
+            </GlassCard>
+
+            {/* Card 2: Performance */}
+            <GlassCard className="p-5 flex flex-col items-center justify-between text-center">
+              <div className="w-full flex justify-between items-center pb-2 border-b border-zinc-800/80 mb-2">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Performance</span>
+                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                  35% Weight
+                </span>
+              </div>
+              <div className="py-2">
+                <ScoreRing score={healthScore.performance} size={130} strokeWidth={10} sublabel="Perf" />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-2 font-medium">Cache Hit & I/O Spills</p>
+            </GlassCard>
+
+            {/* Card 3: Security */}
+            <GlassCard className="p-5 flex flex-col items-center justify-between text-center">
+              <div className="w-full flex justify-between items-center pb-2 border-b border-zinc-800/80 mb-2">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Security</span>
+                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                  20% Weight
+                </span>
+              </div>
+              <div className="py-2">
+                <ScoreRing score={healthScore.security} size={130} strokeWidth={10} sublabel="Security" />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-2 font-medium">SSL & Read-Only Guard</p>
+            </GlassCard>
+
+            {/* Card 4: Indexing */}
+            <GlassCard className="p-5 flex flex-col items-center justify-between text-center">
+              <div className="w-full flex justify-between items-center pb-2 border-b border-zinc-800/80 mb-2">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Indexing</span>
+                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                  20% Weight
+                </span>
+              </div>
+              <div className="py-2">
+                <ScoreRing score={healthScore.indexHealth} size={130} strokeWidth={10} sublabel="Indexes" />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-2 font-medium">Access Paths & Keys</p>
+            </GlassCard>
+
+            {/* Card 5: Quality */}
+            <GlassCard className="p-5 flex flex-col items-center justify-between text-center">
+              <div className="w-full flex justify-between items-center pb-2 border-b border-zinc-800/80 mb-2">
+                <span className="text-xs font-bold text-white uppercase tracking-wider">Quality</span>
+                <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+                  15% Weight
+                </span>
+              </div>
+              <div className="py-2">
+                <ScoreRing score={healthScore.queryQuality} size={130} strokeWidth={10} sublabel="Quality" />
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-2 font-medium">Deadlocks & Antipatterns</p>
+            </GlassCard>
+          </div>
+        </div>
+      )}
 
       {/* KPI Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-6">
@@ -150,13 +261,25 @@ export const Dashboard: React.FC = () => {
         <GlassCard className="lg:col-span-2">
           <h3 className="text-sm font-semibold text-white mb-4">Query Execution Time Trend (ms)</h3>
           <div className="h-72">
-            <ReactECharts option={lineChartOption} style={{ height: "100%" }} />
+            {charts?.executionTimeTrend && charts.executionTimeTrend.length > 0 ? (
+              <ReactECharts option={lineChartOption} style={{ height: "100%" }} />
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-zinc-500">
+                No execution time telemetry recorded yet. Run queries or benchmarks to view trends.
+              </div>
+            )}
           </div>
         </GlassCard>
         <GlassCard>
           <h3 className="text-sm font-semibold text-white mb-4">Issue Severity Distribution</h3>
           <div className="h-72">
-            <ReactECharts option={pieChartOption} style={{ height: "100%" }} />
+            {charts?.severityDistribution && charts.severityDistribution.some((d: any) => d.value > 0) ? (
+              <ReactECharts option={pieChartOption} style={{ height: "100%" }} />
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-zinc-500">
+                No active issues recorded in query history.
+              </div>
+            )}
           </div>
         </GlassCard>
       </div>
@@ -164,8 +287,8 @@ export const Dashboard: React.FC = () => {
       {/* Slowest Queries and Recommendations List */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <GlassCard>
-          <h3 className="text-sm font-semibold text-white mb-4">Top Slow Queries</h3>
-          <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-white mb-4">Top Analyzed Queries</h3>
+          <div className="space-y-3">
             {charts?.topSlowQueries && charts.topSlowQueries.length > 0 ? (
               charts.topSlowQueries.map((q: any) => (
                 <div key={q.id} className="flex justify-between items-center p-3 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 transition">
@@ -181,14 +304,14 @@ export const Dashboard: React.FC = () => {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-zinc-500">No query logs recorded.</p>
+              <p className="text-xs text-zinc-500 py-8 text-center">No SQL queries analyzed yet.</p>
             )}
           </div>
         </GlassCard>
 
         <GlassCard>
           <h3 className="text-sm font-semibold text-white mb-4">Recent Index/Performance Advisor Alerts</h3>
-          <div className="space-y-4">
+          <div className="space-y-3">
             {recentRecommendations && recentRecommendations.length > 0 ? (
               recentRecommendations.map((r: any) => (
                 <div key={r.id} className="flex justify-between items-start gap-4 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
@@ -200,7 +323,7 @@ export const Dashboard: React.FC = () => {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-zinc-500">No active alerts. Database is running smoothly!</p>
+              <p className="text-xs text-zinc-500 py-8 text-center">No active alerts recorded.</p>
             )}
           </div>
         </GlassCard>

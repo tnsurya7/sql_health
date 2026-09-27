@@ -58,7 +58,7 @@ export class HealthScoreEngine {
       indexScore -= (1.5 - indexRatio) * 30; // Under-indexing penalty
     }
 
-    const indexRecommendations = recommendations.filter(r => r.category === "INDEXES" && r.status === "NEW");
+    const indexRecommendations = recommendations.filter(r => (r.category === "INDEXING" || r.category === "INDEXES") && r.status === "NEW");
     indexScore -= indexRecommendations.length * 10;
     const indexHealth = Math.max(10, Math.min(100, Math.round(indexScore)));
 

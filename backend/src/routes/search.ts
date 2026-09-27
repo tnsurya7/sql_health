@@ -1,65 +1,151 @@
-import { Router, Response } from "express";
+import { Router, Request, Response } from "express";
 import { prisma } from "../server";
-import { authMiddleware, AuthenticatedRequest } from "../middleware/auth";
+import { connectionManager } from "../database/connection-manager";
 
 const router = Router();
 
-router.get("/", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-  const { q } = req.query;
-  if (!q) {
+export interface GlobalSearchResult {
+  category: "Databases" | "Tables" | "Queries" | "Recommendations" | "Fingerprints" | "Knowledge";
+  title: string;
+  subtitle: string;
+  url: string;
+  badge?: string;
+}
+
+// GET /api/search - Global search across databases, tables, queries, recommendations, fingerprints, and knowledge
+router.get("/", async (req: Request, res: Response) => {
+  const query = String(req.query.q || "").trim().toLowerCase();
+  if (!query) {
     return res.status(200).json({ success: true, data: [] });
   }
 
-  const queryStr = String(q);
+  const results: GlobalSearchResult[] = [];
 
   try {
-    // 1. Search table names
-    const tables = await prisma.tableMetadata.findMany({
-      where: { tableName: { contains: queryStr, mode: "insensitive" } },
-      take: 5
+    // 1. Search Databases
+    const databases = await prisma.databaseConnection.findMany({
+      where: {
+        OR: [
+          { name: { contains: query, mode: "insensitive" } },
+          { database: { contains: query, mode: "insensitive" } },
+          { host: { contains: query, mode: "insensitive" } },
+        ],
+      },
+      take: 4,
     });
 
-    // 2. Search SQL queries
+    for (const d of databases) {
+      results.push({
+        category: "Databases",
+        title: d.name,
+        subtitle: `${d.databaseType.toUpperCase()} - ${d.database} on ${d.host}:${d.port}`,
+        url: `/databases?id=${d.id}`,
+        badge: connectionManager.isConnected(d.id) ? "Online" : d.status,
+      });
+    }
+
+    // 2. Search Live Tables from active adapter
+    const activeAdapter = connectionManager.getActiveAdapter();
+    if (activeAdapter) {
+      const tables = await activeAdapter.getTables().catch(() => []);
+      const matchedTables = tables.filter((t) => t.name.toLowerCase().includes(query)).slice(0, 5);
+      for (const t of matchedTables) {
+        results.push({
+          category: "Tables",
+          title: t.name,
+          subtitle: `Schema: ${t.schema} - ${t.rowCount.toLocaleString()} rows (${(t.sizeBytes / 1024).toFixed(0)} KB)`,
+          url: `/schema?table=${t.name}`,
+          badge: t.type,
+        });
+      }
+    }
+
+    // 3. Search SQL Queries
     const queries = await prisma.sqlQuery.findMany({
-      where: { rawSql: { contains: queryStr, mode: "insensitive" } },
-      take: 5
+      where: {
+        rawSql: { contains: query, mode: "insensitive" },
+      },
+      take: 4,
     });
 
-    // 3. Search Recommendations
+    for (const q of queries) {
+      results.push({
+        category: "Queries",
+        title: q.rawSql.length > 50 ? q.rawSql.substring(0, 50) + "..." : q.rawSql,
+        subtitle: `Score: ${q.score}/100 - Fingerprint: ${q.fingerprint || "N/A"}`,
+        url: `/optimizer?sql=${encodeURIComponent(q.rawSql)}`,
+        badge: `${q.score}/100`,
+      });
+    }
+
+    // 4. Search Recommendations
     const recs = await prisma.recommendation.findMany({
       where: {
         OR: [
-          { title: { contains: queryStr, mode: "insensitive" } },
-          { description: { contains: queryStr, mode: "insensitive" } }
-        ]
+          { title: { contains: query, mode: "insensitive" } },
+          { description: { contains: query, mode: "insensitive" } },
+        ],
       },
-      take: 5
+      take: 4,
     });
 
-    // 4. Search Issues
-    const issues = await prisma.queryIssue.findMany({
+    for (const r of recs) {
+      results.push({
+        category: "Recommendations",
+        title: r.title,
+        subtitle: r.description.length > 70 ? r.description.substring(0, 70) + "..." : r.description,
+        url: `/recommendations?id=${r.id}`,
+        badge: r.severity,
+      });
+    }
+
+    // 5. Search Query Fingerprints
+    const fingerprints = await prisma.queryFingerprint.findMany({
       where: {
         OR: [
-          { title: { contains: queryStr, mode: "insensitive" } },
-          { description: { contains: queryStr, mode: "insensitive" } }
-        ]
+          { fingerprint: { contains: query, mode: "insensitive" } },
+          { normalizedSql: { contains: query, mode: "insensitive" } },
+        ],
       },
-      take: 5
+      take: 4,
     });
 
-    // Map into unified search result items
-    const results = [
-      ...tables.map(t => ({ id: t.id, type: "TABLE", title: t.tableName, subtitle: `Database table metadata` })),
-      ...queries.map(q => ({ id: q.id, type: "QUERY", title: q.rawSql.substring(0, 50) + "...", subtitle: `Score: ${q.score}` })),
-      ...recs.map(r => ({ id: r.id, type: "RECOMMENDATION", title: r.title, subtitle: `Severity: ${r.severity}` })),
-      ...issues.map(i => ({ id: i.id, type: "ISSUE", title: i.title, subtitle: `Severity: ${i.severity}` }))
-    ];
+    for (const fp of fingerprints) {
+      results.push({
+        category: "Fingerprints",
+        title: fp.fingerprint,
+        subtitle: `Avg Latency: ${fp.avgLatencyMs.toFixed(1)}ms (${fp.executionCount} executions)`,
+        url: `/performance?fp=${fp.fingerprint}`,
+        badge: `${fp.avgLatencyMs.toFixed(1)}ms`,
+      });
+    }
+
+    // 6. Search RAG Knowledge
+    const chunks = await prisma.optimizationChunk.findMany({
+      where: {
+        OR: [
+          { title: { contains: query, mode: "insensitive" } },
+          { content: { contains: query, mode: "insensitive" } },
+        ],
+      },
+      take: 4,
+    });
+
+    for (const ch of chunks) {
+      results.push({
+        category: "Knowledge",
+        title: ch.title,
+        subtitle: ch.content.length > 70 ? ch.content.substring(0, 70) + "..." : ch.content,
+        url: `/rag?id=${ch.id}`,
+        badge: ch.category,
+      });
+    }
 
     res.status(200).json({ success: true, data: results });
   } catch (err: any) {
     res.status(500).json({
       success: false,
-      error: { code: "SERVER_ERROR", message: err.message }
+      error: { code: "SEARCH_ERROR", message: err.message },
     });
   }
 });

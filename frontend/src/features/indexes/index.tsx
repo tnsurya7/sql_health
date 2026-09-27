@@ -18,7 +18,7 @@ export const IndexAdvisor: React.FC = () => {
       });
       const json = await res.json();
       if (json.success) {
-        setRecs(json.data.filter((r: any) => r.category === "INDEXES"));
+        setRecs(json.data.filter((r: any) => r.category === "INDEXING" || r.category === "INDEXES"));
       }
     } catch (err) {
       console.error(err);

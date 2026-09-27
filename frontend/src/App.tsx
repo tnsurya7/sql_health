@@ -5,6 +5,7 @@ import { AppLayout } from "./layouts/AppLayout";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
 import { Dashboard } from "./features/dashboard";
+import { DatabasesPage } from "./features/databases";
 import { SqlAnalyzer } from "./features/sql-analyzer";
 import { QueryOptimizer } from "./features/optimizer";
 import { ExecutionPlans } from "./features/execution-plan";
@@ -12,8 +13,11 @@ import { SchemaExplorer } from "./features/schema";
 import { IndexAdvisor } from "./features/indexes";
 import { StoredProcedures, Views, Functions, Triggers } from "./features/procedures";
 import { Performance } from "./features/performance";
+import { DeadlocksPage } from "./features/deadlocks";
 import { Recommendations } from "./features/recommendations";
+import { DatabaseHealthPage } from "./features/health";
 import { QueryHistory } from "./features/history";
+import { RagKnowledgePage } from "./features/rag";
 import { SettingsPage } from "./features/settings";
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -31,8 +35,9 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
 
-        {/* Protected Dashboard and Features */}
+        {/* Protected Real Observability Routes */}
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/databases" element={<ProtectedRoute><DatabasesPage /></ProtectedRoute>} />
         <Route path="/sql-analyzer" element={<ProtectedRoute><SqlAnalyzer /></ProtectedRoute>} />
         <Route path="/optimizer" element={<ProtectedRoute><QueryOptimizer /></ProtectedRoute>} />
         <Route path="/execution-plans" element={<ProtectedRoute><ExecutionPlans /></ProtectedRoute>} />
@@ -43,8 +48,11 @@ export default function App() {
         <Route path="/functions" element={<ProtectedRoute><Functions /></ProtectedRoute>} />
         <Route path="/triggers" element={<ProtectedRoute><Triggers /></ProtectedRoute>} />
         <Route path="/performance" element={<ProtectedRoute><Performance /></ProtectedRoute>} />
+        <Route path="/deadlocks" element={<ProtectedRoute><DeadlocksPage /></ProtectedRoute>} />
         <Route path="/recommendations" element={<ProtectedRoute><Recommendations /></ProtectedRoute>} />
+        <Route path="/health" element={<ProtectedRoute><DatabaseHealthPage /></ProtectedRoute>} />
         <Route path="/history" element={<ProtectedRoute><QueryHistory /></ProtectedRoute>} />
+        <Route path="/rag" element={<ProtectedRoute><RagKnowledgePage /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
 
         {/* Wildcard redirect */}

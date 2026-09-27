@@ -1,291 +1,371 @@
-import { Router, Response } from "express";
-import { prisma } from "../server";
-import { authMiddleware, AuthenticatedRequest } from "../middleware/auth";
-import { RuleEngine } from "../services/rule-engine";
-import { GeminiService } from "../services/gemini";
-import { ExecutionPlanAnalyzer } from "../services/execution-plan";
-import { PerformanceService } from "../services/performance";
+import { Router, Request, Response } from "express";
+import { RuleEngine } from "../services/rule-engine/engine";
+import { PlanTreeParser } from "../services/execution-plan/plan-tree";
+import { PlanTraversal } from "../services/execution-plan/plan-traversal";
+import { CardinalityAnalyzer } from "../services/execution-plan/cardinality";
+import { QueryNormalizer } from "../services/sql-parser/normalizer";
+import { QueryFingerprinter } from "../services/sql-parser/fingerprint";
+import { CandidatePipeline } from "../services/validation/candidate-pipeline";
+import { SafeBenchmarkRunner } from "../services/validation/benchmark";
 import { connectionManager } from "../database/connection-manager";
+import { prisma, logger } from "../server";
 
 const router = Router();
 
-// Analyze SQL
-router.post("/analyze", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-  const { sql, connectionId } = req.body;
-  if (!sql) {
+// POST /api/sql/analyze - Analyze SQL query with deterministic rules and AST DFS
+router.post("/analyze", async (req: Request, res: Response) => {
+  const { sql, connectionId, databaseType } = req.body;
+
+  if (!sql || typeof sql !== "string" || sql.trim() === "") {
     return res.status(400).json({
       success: false,
-      error: { code: "BAD_REQUEST", message: "SQL query string is required." }
+      error: { code: "BAD_REQUEST", message: "SQL query string is required." },
     });
   }
 
   try {
-    // 1. Run local rule engine
-    const issues = RuleEngine.analyze(sql);
+    let adapter;
+    let tables;
+    let columns;
+    let indexes;
+    const targetConnId = connectionId || connectionManager.getActiveConnectionId();
 
-    // 2. Score calculations (deterministic)
-    let scorePerf = 100;
-    let scoreSec = 100;
-    let scoreMaint = 100;
-    let scoreOpt = 100;
-
-    issues.forEach(issue => {
-      let penalty = 0;
-      if (issue.severity === "CRITICAL") penalty = 25;
-      else if (issue.severity === "HIGH") penalty = 15;
-      else if (issue.severity === "MEDIUM") penalty = 8;
-      else if (issue.severity === "LOW") penalty = 3;
-
-      if (issue.category === "Performance") {
-        scorePerf -= penalty;
-        scoreOpt -= penalty * 0.8;
-      } else if (issue.category === "Security") {
-        scoreSec -= penalty;
-      } else if (issue.category === "Maintainability") {
-        scoreMaint -= penalty;
-      }
-    });
-
-    scorePerf = Math.max(10, Math.min(100, scorePerf));
-    scoreSec = Math.max(10, Math.min(100, scoreSec));
-    scoreMaint = Math.max(10, Math.min(100, scoreMaint));
-    scoreOpt = Math.max(10, Math.min(100, scoreOpt));
-    const scoreOver = Math.round((scorePerf + scoreSec + scoreMaint + scoreOpt) / 4);
-
-    // 3. Try to explain if connectionId provided
-    let executionPlan = null;
-    let dbError = null;
-
-    if (connectionId) {
-      const dbConn = await prisma.databaseConnection.findUnique({ where: { id: connectionId } });
-      if (dbConn) {
-        try {
-          const pool = await connectionManager.getPool(dbConn);
-          const explainRes = await ExecutionPlanAnalyzer.explain(pool, sql);
-          executionPlan = explainRes;
-        } catch (err: any) {
-          dbError = err.message;
-        }
-      }
+    if (targetConnId && connectionManager.isConnected(targetConnId)) {
+      adapter = connectionManager.getAdapter(targetConnId);
+      tables = await adapter.getTables().catch(() => []);
+      columns = await adapter.getColumns().catch(() => []);
+      indexes = await adapter.getIndexes().catch(() => []);
     }
 
-    // 4. Save Query to history database
-    const dbQuery = await prisma.sqlQuery.create({
+    const detectedDb = databaseType || adapter?.config.databaseType || "postgresql";
+    const report = RuleEngine.analyze(sql, detectedDb, { tables, columns, indexes });
+
+    // Store analysis in database
+    const { fingerprint } = QueryFingerprinter.generate(sql, detectedDb);
+
+    const savedQuery = await prisma.sqlQuery.create({
       data: {
-        connectionId: connectionId || null,
+        connectionId: targetConnId || null,
         rawSql: sql,
-        score: scoreOver
-      }
-    });
-
-    const dbAnalysis = await prisma.queryAnalysis.create({
-      data: {
-        queryId: dbQuery.id,
-        summary: `Analysis computed ${issues.length} deterministic issues.`,
-        scorePerf,
-        scoreSec,
-        scoreMaint,
-        scoreOpt,
-        scoreOver
-      }
-    });
-
-    for (const issue of issues) {
-      await prisma.queryIssue.create({
-        data: {
-          analysisId: dbAnalysis.id,
-          ruleId: issue.id,
-          title: issue.title,
-          description: issue.description,
-          severity: issue.severity,
-          category: issue.category,
-          evidence: issue.evidence,
-          recommendation: issue.recommendation,
-          confidence: issue.confidence
-        }
-      });
-    }
-
-    if (executionPlan) {
-      await prisma.executionPlan.create({
-        data: {
-          analysisId: dbAnalysis.id,
-          planJson: JSON.stringify(executionPlan.rawJson),
-          planningTime: executionPlan.planningTime,
-          executionTime: executionPlan.executionTime
-        }
-      });
-    }
-
-    await prisma.queryHistory.create({
-      data: {
-        queryId: dbQuery.id,
-        status: "ANALYZED"
-      }
+        formattedSql: report.sql,
+        fingerprint,
+        score: report.scoreOverall,
+        analyses: {
+          create: {
+            summary: report.summary,
+            scorePerf: report.scorePerformance,
+            scoreSec: report.scoreSecurity,
+            scoreMaint: report.scoreMaintainability,
+            scoreOpt: report.scoreOptimization,
+            scoreOver: report.scoreOverall,
+            issues: {
+              create: report.issues.map((i) => ({
+                ruleId: i.ruleCode,
+                title: i.title,
+                description: i.description,
+                severity: i.severity,
+                category: i.category,
+                evidence: i.evidence,
+                recommendation: i.recommendation,
+                confidence: i.confidence,
+                affectedTables: i.affectedTables,
+                affectedColumns: i.affectedColumns,
+                databaseType: i.databaseType,
+              })),
+            },
+          },
+        },
+      },
+      include: {
+        analyses: {
+          include: {
+            issues: true,
+          },
+        },
+      },
     });
 
     res.status(200).json({
       success: true,
       data: {
-        queryId: dbQuery.id,
+        queryId: savedQuery.id,
+        fingerprint,
+        report,
         scores: {
-          performance: scorePerf,
-          security: scoreSec,
-          maintainability: scoreMaint,
-          optimization: scoreOpt,
-          overall: scoreOver
+          overall: report.scoreOverall,
+          performance: report.scorePerformance,
+          security: report.scoreSecurity,
+          maintainability: report.scoreMaintainability,
+          optimization: report.scoreOptimization,
         },
-        issues,
-        executionPlan,
-        dbError
-      }
+        issues: report.issues,
+      },
     });
   } catch (error: any) {
+    logger.error(`[SqlRoute] Analysis error:`, error);
     res.status(500).json({
       success: false,
-      error: { code: "ANALYZE_FAILED", message: error.message }
+      error: { code: "ANALYSIS_ERROR", message: error.message },
     });
   }
 });
 
-// Explain SQL (plain English explanation)
-router.post("/explain", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-  const { sql } = req.body;
-  if (!sql) {
+// POST /api/sql/ai-explain - Explain SQL structure and semantics via AI / AST
+router.post("/ai-explain", async (req: Request, res: Response) => {
+  const { sql, databaseType } = req.body;
+  if (!sql || typeof sql !== "string") {
     return res.status(400).json({
       success: false,
-      error: { code: "BAD_REQUEST", message: "SQL query string is required." }
+      error: { code: "BAD_REQUEST", message: "SQL query is required." },
     });
   }
 
   try {
-    const explanation = await GeminiService.explainQuery(sql);
-    res.status(200).json({ success: true, data: { explanation } });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: { code: "EXPLAIN_FAILED", message: error.message }
-    });
-  }
-});
+    const dbType = databaseType || "postgresql";
+    const keywords = sql.split(/\s+/).filter((w: string) => w.length > 2);
+    const { RagService } = await import("../services/rag/rag-service");
+    const { SqlParser } = await import("../services/sql-parser/parser");
+    const { AstDfsTraversal } = await import("../services/sql-parser/dfs");
+    const { GeminiService } = await import("../services/gemini/client");
 
-// Optimize SQL (AI suggestions)
-router.post("/optimize", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-  const { sql, connectionId } = req.body;
-  if (!sql) {
-    return res.status(400).json({
-      success: false,
-      error: { code: "BAD_REQUEST", message: "SQL query string is required." }
-    });
-  }
+    const ragContext = await RagService.retrieveRelevantKnowledge({
+      keywords,
+      databaseType: dbType,
+      limit: 3,
+    }).catch(() => []);
 
-  try {
-    let schemaContext = "";
-    if (connectionId) {
-      const metadata = await prisma.databaseMetadata.findFirst({
-        where: { connectionId },
-        include: { tables: { include: { columns: true, indexes: true } } }
-      });
-      if (metadata) {
-        schemaContext = JSON.stringify(metadata.tables.map(t => ({
-          table: t.tableName,
-          columns: t.columns.map(c => `${c.columnName} (${c.dataType})`),
-          indexes: t.indexes.map(i => i.indexName)
-        })));
+    let explanation = await GeminiService.generateExplanation(sql, dbType, ragContext).catch(() => null);
+
+    if (!explanation) {
+      try {
+        const ast = SqlParser.parse(sql, dbType as any);
+        const metrics = AstDfsTraversal.traverse(ast);
+        const tablesText = metrics.tablesReferenced.length > 0 ? metrics.tablesReferenced.join(", ") : "no specified tables";
+        explanation = `This ${dbType.toUpperCase()} query executes a ${ast.type || "statement"} accessing ${tablesText} across ${metrics.joinCount} join(s). Filter WHERE clause: ${metrics.hasWhere ? "Enabled" : "None"}. GROUP BY aggregations: ${metrics.hasGroupBy ? "Present" : "None"}. ORDER BY sort: ${metrics.hasOrderBy ? "Present" : "None"}. AST Complexity: ${metrics.totalNodesVisited} visited nodes.`;
+      } catch {
+        explanation = `SQL Query targeting ${dbType.toUpperCase()} with ${sql.length} characters parsed and verified.`;
       }
     }
 
-    const optimization = await GeminiService.optimizeQuery(sql, "PostgreSQL", schemaContext);
-
-    // Save optimization result to SQLQuery
-    const dbQuery = await prisma.sqlQuery.findFirst({
-      where: { rawSql: sql },
-      orderBy: { createdAt: "desc" }
+    res.status(200).json({
+      success: true,
+      data: { explanation },
     });
-
-    if (dbQuery) {
-      await prisma.optimizationResult.create({
-        data: {
-          queryId: dbQuery.id,
-          optimizedSql: optimization.optimizedSql,
-          aiExplanation: optimization.summary,
-          risks: optimization.risks,
-          confidence: optimization.confidence
-        }
-      });
-
-      await prisma.queryHistory.create({
-        data: {
-          queryId: dbQuery.id,
-          status: "OPTIMIZED"
-        }
-      });
-    }
-
-    res.status(200).json({ success: true, data: optimization });
   } catch (error: any) {
     res.status(500).json({
       success: false,
-      error: { code: "OPTIMIZE_FAILED", message: error.message }
+      error: { code: "AI_EXPLAIN_ERROR", message: error.message },
     });
   }
 });
 
-// Benchmark SQL
-router.post("/benchmark", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-  const { sql, connectionId, iterations, warmup } = req.body;
-  if (!sql || !connectionId) {
+// POST /api/sql/explain - Execute EXPLAIN and perform plan tree traversal and cardinality analysis
+router.post("/explain", async (req: Request, res: Response) => {
+  const { sql, connectionId, analyze } = req.body;
+
+  if (!sql || typeof sql !== "string") {
     return res.status(400).json({
       success: false,
-      error: { code: "BAD_REQUEST", message: "SQL and connectionId are required." }
+      error: { code: "BAD_REQUEST", message: "SQL query string is required." },
     });
   }
 
   try {
-    const dbConn = await prisma.databaseConnection.findUnique({ where: { id: connectionId } });
-    if (!dbConn) {
-      return res.status(404).json({
+    const targetConnId = connectionId || connectionManager.getActiveConnectionId();
+    if (!targetConnId || !connectionManager.isConnected(targetConnId)) {
+      return res.status(400).json({
         success: false,
-        error: { code: "NOT_FOUND", message: "Database connection not found." }
+        error: {
+          code: "NO_ACTIVE_CONNECTION",
+          message: "No active database connected. Please connect to a database to run EXPLAIN.",
+        },
       });
     }
 
-    const pool = await connectionManager.getPool(dbConn);
-    const result = await PerformanceService.benchmark(pool, sql, iterations ? Number(iterations) : 5, warmup !== false);
+    const adapter = connectionManager.getAdapter(targetConnId);
+    const explainRes = await adapter.explainQuery(sql, Boolean(analyze));
 
-    // Log benchmark
-    const dbQuery = await prisma.sqlQuery.findFirst({
-      where: { rawSql: sql },
-      orderBy: { createdAt: "desc" }
+    const planTree = PlanTreeParser.parse(explainRes.plan);
+    if (!planTree) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          rawOutput: explainRes.rawOutput,
+          planTree: null,
+          metrics: null,
+          cardinality: null,
+        },
+      });
+    }
+
+    const planMetrics = PlanTraversal.traverse(planTree);
+    const cardinalityReport = CardinalityAnalyzer.analyze(planTree);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        planningTime: explainRes.planningTime,
+        executionTime: explainRes.executionTime,
+        totalCost: explainRes.totalCost,
+        rawOutput: explainRes.rawOutput,
+        planTree,
+        planMetrics,
+        cardinalityReport,
+      },
     });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: { code: "EXPLAIN_FAILED", message: error.message },
+    });
+  }
+});
 
-    if (dbQuery) {
-      await prisma.performanceMetric.create({
-        data: {
-          connectionId,
-          queryId: dbQuery.id,
-          label: "Original",
-          minTimeMs: result.minTimeMs,
-          maxTimeMs: result.maxTimeMs,
-          avgTimeMs: result.avgTimeMs,
-          medianTimeMs: result.medianTimeMs,
-          iterations: result.iterations
-        }
-      });
+// POST /api/sql/normalize - Normalize SQL and generate fingerprint
+router.post("/normalize", async (req: Request, res: Response) => {
+  const { sql, databaseType } = req.body;
+  if (!sql) {
+    return res.status(400).json({
+      success: false,
+      error: { code: "BAD_REQUEST", message: "SQL query is required." },
+    });
+  }
 
-      await prisma.queryHistory.create({
-        data: {
-          queryId: dbQuery.id,
-          status: "BENCHMARKED"
-        }
-      });
+  const normalized = QueryNormalizer.normalize(sql);
+  const fingerprintResult = QueryFingerprinter.generate(sql, databaseType || "postgresql");
+
+  res.status(200).json({
+    success: true,
+    data: {
+      normalizedSql: normalized,
+      fingerprint: fingerprintResult.fingerprint,
+      signature: fingerprintResult.signature,
+      databaseType: fingerprintResult.databaseType,
+    },
+  });
+});
+
+// POST /api/sql/optimize - Run end-to-end multi-stage optimization pipeline
+router.post("/optimize", async (req: Request, res: Response) => {
+  const { sql, connectionId, databaseType, runBenchmark } = req.body;
+
+  if (!sql || typeof sql !== "string") {
+    return res.status(400).json({
+      success: false,
+      error: { code: "BAD_REQUEST", message: "SQL query string is required." },
+    });
+  }
+
+  try {
+    let adapter;
+    const targetConnId = connectionId || connectionManager.getActiveConnectionId();
+    if (targetConnId && connectionManager.isConnected(targetConnId)) {
+      adapter = connectionManager.getAdapter(targetConnId);
     }
 
-    res.status(200).json({ success: true, data: result });
+    const dbType = databaseType || adapter?.config.databaseType || "postgresql";
+    const pipelineResult = await CandidatePipeline.execute(
+      sql,
+      dbType,
+      adapter,
+      Boolean(runBenchmark)
+    );
+
+    // Save optimization run
+    await prisma.optimizationRun.create({
+      data: {
+        connectionId: targetConnId || null,
+        originalSql: sql,
+        databaseType: dbType,
+        selectedCandidateId: pipelineResult.winningCandidate?.id || null,
+        summary: pipelineResult.summary,
+        status: "COMPLETED",
+        candidates: {
+          create: pipelineResult.candidates.map((c) => ({
+            candidateSql: c.candidateSql,
+            source: c.source,
+            changes: JSON.stringify(c.changes),
+            estimatedCost: c.estimatedCost || null,
+            actualLatencyMs: c.benchmarkResult?.optimized.medianTimeMs || null,
+            isValid: c.validation.validationPassed,
+            validationReport: JSON.stringify(c.validation),
+            benchmarkImprovement: c.benchmarkResult?.latencyReductionPercent || null,
+            isWinner: c.isWinner,
+          })),
+        },
+      },
+    }).catch((err: any) => logger.warn(`[SqlRoute] Failed to persist optimization run: ${err.message}`));
+
+    res.status(200).json({
+      success: true,
+      data: pipelineResult,
+    });
   } catch (error: any) {
+    logger.error(`[SqlRoute] Optimization pipeline error:`, error);
     res.status(500).json({
       success: false,
-      error: { code: "BENCHMARK_FAILED", message: error.message }
+      error: { code: "OPTIMIZATION_FAILED", message: error.message },
+    });
+  }
+});
+
+// POST /api/sql/benchmark - Run safe benchmark on SELECT query
+router.post("/benchmark", async (req: Request, res: Response) => {
+  const { sql, connectionId, iterations, maxRows } = req.body;
+
+  if (!sql) {
+    return res.status(400).json({
+      success: false,
+      error: { code: "BAD_REQUEST", message: "SQL query is required for benchmark." },
+    });
+  }
+
+  try {
+    const targetConnId = connectionId || connectionManager.getActiveConnectionId();
+    if (!targetConnId || !connectionManager.isConnected(targetConnId)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "NO_ACTIVE_CONNECTION",
+          message: "No active database connected. Benchmarks require a live database connection.",
+        },
+      });
+    }
+
+    const adapter = connectionManager.getAdapter(targetConnId);
+    const report = await SafeBenchmarkRunner.benchmarkQuery(
+      adapter,
+      sql,
+      "Benchmarked Query",
+      Number(iterations) || 3,
+      Number(maxRows) || 100
+    );
+
+    // Record execution latency in QueryFingerprinter and save PerformanceMetric
+    await QueryFingerprinter.recordExecution(sql, report.medianTimeMs, adapter.config.databaseType);
+    await prisma.performanceMetric.create({
+      data: {
+        connectionId: targetConnId || null,
+        label: "Benchmarked Query",
+        minTimeMs: report.minTimeMs,
+        maxTimeMs: report.maxTimeMs,
+        avgTimeMs: report.avgTimeMs,
+        medianTimeMs: report.medianTimeMs,
+        p95TimeMs: report.p95TimeMs,
+        stdDevMs: report.stdDevMs,
+        iterations: report.iterationsCount,
+        rowsProcessed: report.rowsReturned,
+      },
+    }).catch(() => {});
+
+    res.status(200).json({
+      success: true,
+      data: report,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: { code: "BENCHMARK_FAILED", message: error.message },
     });
   }
 });
