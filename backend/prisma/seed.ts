@@ -17,9 +17,7 @@ async function main() {
 
   const user = await prisma.user.upsert({
     where: { email },
-    update: {
-      password: hashedPassword,
-    },
+    update: {}, // Preserve existing admin user data without overwriting passwords
     create: {
       email,
       password: hashedPassword,

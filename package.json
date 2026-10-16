@@ -8,7 +8,8 @@
     "frontend"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "setup": "node scripts/setup.js",
+    "dev": "concurrently --kill-others-on-fail --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
     "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
     "start": "npm run start --workspace=backend",
     "db:push": "npm run db:push --workspace=backend",
@@ -22,5 +23,8 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "^4.64.7"
   }
 }

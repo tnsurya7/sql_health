@@ -32,51 +32,117 @@ SQLSense AI is an enterprise-grade SQL intelligence, algorithmic optimization, s
 
 ---
 
-## 📋 Prerequisites & Installation
+## ⚡ Windows Quick Start (3 Steps)
 
-### 1. Requirements
-- **Node.js**: v18.0.0 or higher
-- **PostgreSQL**: Local or remote instance (e.g., PostgreSQL 15/16)
+Get up and running on Windows 10/11 with zero workspace or Prisma complexity:
 
-### 2. Configure Environment Variables
-Copy `.env.example` to `.env` and `backend/.env`:
-```bash
-cp .env.example .env
-cp .env.example backend/.env
+### 1. Prerequisites
+- **Git**: [https://git-scm.com/download/win](https://git-scm.com/download/win)
+- **Node.js 18+**: [https://nodejs.org/en/download/](https://nodejs.org/en/download/)
+- **PostgreSQL 15 or 16**: [https://www.postgresql.org/download/windows/](https://www.postgresql.org/download/windows/)
+
+Make sure the PostgreSQL service is running:
+```powershell
+Get-Service -Name postgresql*
 ```
 
-Configure `.env`:
+### 2. Configure Environment
+In PowerShell from the repository root:
+```powershell
+Copy-Item .env.example .env
+Copy-Item .env backend\.env
+```
+Open `.env` in Notepad and adjust `DATABASE_URL` with your PostgreSQL password:
 ```env
-NODE_ENV=development
-APP_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/sqlsense"
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/sqlsense"
-JWT_SECRET="sqlsense_super_secret_jwt_key_2026"
-ENCRYPTION_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-GEMINI_API_KEY="your_gemini_api_key_here"
-GEMINI_MODEL="gemini-1.5-pro"
-BACKEND_PORT=5001
-FRONTEND_PORT=5173
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@localhost:5432/sqlsense"
+```
+*(If your PostgreSQL username is not `postgres`, adjust accordingly).*
+
+Ensure the application metadata database exists:
+```powershell
+psql -U postgres -c "CREATE DATABASE sqlsense;"
 ```
 
-### 3. Install Dependencies & Synchronize Application Database
-```bash
+### 3. Install, Setup, and Run
+```powershell
+# Step A: Install dependencies across all workspaces
 npm install
-npm run db:push
-npm run db:generate
-```
 
-### 4. Run Test Suite
-```bash
-npm test
-```
-Executes 31 backend algorithm tests and frontend unit tests.
+# Step B: One-command automated setup (validates env, checks Postgres, generates Prisma, migrates & seeds)
+npm run setup
 
-### 5. Start Development Servers
-```bash
+# Step C: Start both backend and frontend concurrently
 npm run dev
 ```
+
 - **Frontend Dashboard**: [http://localhost:5173](http://localhost:5173)
 - **Backend API & Health**: [http://localhost:5001/api/health](http://localhost:5001/api/health)
+- **Default Login**: `admin@localhost` / `admin`
+
+---
+
+## 🗄️ Setting Up the Target Benchmark Database (`sqlsense_test`)
+
+SQLSense AI distinguishes between the **application metadata database** (`sqlsense`) and the **target database under analysis** (`sqlsense_test`).
+
+To load the realistic test database with 11 tables, 4 views, functions, triggers, and procedures:
+```powershell
+# 1. Create target database
+psql -U postgres -c "CREATE DATABASE sqlsense_test;"
+
+# 2. Import schema & seed data
+psql -U postgres -d sqlsense_test -f database/sqlsense_test_database.sql
+```
+Detailed instructions and test query walkthroughs are available in [database/README.md](file:///Users/suryakumar/Desktop/Ai_sql/database/README.md) and [database/sqlsense_test_queries.sql](file:///Users/suryakumar/Desktop/Ai_sql/database/sqlsense_test_queries.sql).
+
+---
+
+## 🔧 Windows Troubleshooting & Port Conflicts
+
+### Port 5001 Already in Use (`EADDRINUSE`)
+If port `5001` is already in use by another application or previous process:
+
+1. Identify the process ID (PID) occupying port 5001:
+   ```cmd
+   netstat -ano | findstr :5001
+   ```
+2. Inspect the process name using its PID (the number in the rightmost column):
+   ```cmd
+   tasklist /FI "PID eq <PID>"
+   ```
+3. If you confirm it is a leftover Node or background process that is safe to terminate:
+   ```powershell
+   Stop-Process -Id <PID>           # PowerShell
+   taskkill /F /PID <PID>           # Command Prompt
+   ```
+4. **Alternative**: You can simply change the port in `.env` without stopping anything:
+   ```env
+   BACKEND_PORT=5002
+   ```
+   The frontend Vite proxy automatically forwards requests to your configured `BACKEND_PORT`.
+
+### PostgreSQL Service Not Running
+If `npm run setup` reports that PostgreSQL cannot be reached:
+```powershell
+# Start PostgreSQL service
+Start-Service -Name postgresql-x64-16
+```
+Or open `services.msc` via `Win + R`, locate **postgresql-x64-XX**, and click **Start**.
+
+---
+
+## 🧪 Testing and Building
+
+```powershell
+# Run backend algorithm tests
+npm test --workspace=backend
+
+# Run frontend tests
+npm test --workspace=frontend
+
+# Build for production
+npm run build
+```
 
 ---
 

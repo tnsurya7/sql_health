@@ -11,10 +11,10 @@ async function ensureAdminUser(): Promise<void> {
   try {
     const userCount = await prisma.user.count();
     if (userCount === 0) {
-      const hashedPassword = await bcrypt.hash("Admin@12345", 10);
+      const hashedPassword = await bcrypt.hash("admin", 10);
       await prisma.user.create({
         data: {
-          email: "admin@sqlsense.local",
+          email: "admin@localhost",
           password: hashedPassword,
         },
       });
