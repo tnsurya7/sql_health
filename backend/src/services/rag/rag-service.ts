@@ -59,7 +59,8 @@ export class RagService {
         logger.info("[RagService] RAG knowledge base seeded successfully with expert optimization guides.");
       }
     } catch (err: any) {
-      logger.warn(`[RagService] Error during RAG seed check: ${err.message}`);
+      logger.error(`[RagService] Error during RAG seed check: ${err.message}`);
+      throw err;
     }
   }
 

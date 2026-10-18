@@ -9,6 +9,7 @@ const { spawnSync } = require("child_process");
 const fs   = require("fs");
 const path = require("path");
 const net  = require("net");
+const { Client } = require("pg");
 
 const c = {
   reset : "\x1b[0m", bold: "\x1b[1m",
@@ -44,6 +45,11 @@ function parseDotenv(filePath) {
     vars[key] = val;
   }
   return vars;
+}
+
+// Keep backend/.env synchronized with root .env
+if (fs.existsSync(ENV_ROOT)) {
+  fs.copyFileSync(ENV_ROOT, ENV_BACK);
 }
 
 const envRoot = parseDotenv(ENV_ROOT);
@@ -118,6 +124,103 @@ async function checkPostgres() {
   });
 }
 
+function getDbNameFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.replace(/^\//, "").split("?")[0];
+  } catch (_) {
+    const m = url.match(/postgresql:\/\/[^/]+\/([^?]+)/);
+    return m ? m[1] : null;
+  }
+}
+
+async function confirmApplicationDatabase(dbUrl) {
+  const dbName = getDbNameFromUrl(dbUrl);
+  if (!dbName) {
+    fail("Could not determine database name from DATABASE_URL.");
+    process.exit(1);
+  }
+
+  // Attempt direct connection to intended database
+  const directClient = new Client({ connectionString: dbUrl });
+  try {
+    await directClient.connect();
+    await directClient.query("SELECT 1;");
+    await directClient.end();
+    ok(`Confirmed intended application database: "${dbName}"`);
+    return dbName;
+  } catch (err) {
+    // If database does not exist (PostgreSQL error code 3D000)
+    if (err.code === "3D000") {
+      info(`Database "${dbName}" does not exist yet. Attempting auto-creation...`);
+      // Connect to default 'postgres' database
+      const rootUrl = dbUrl.replace(/\/[^/?]+(\?.*)?$/, "/postgres$1");
+      const rootClient = new Client({ connectionString: rootUrl });
+      try {
+        await rootClient.connect();
+        await rootClient.query(`CREATE DATABASE "${dbName}";`);
+        await rootClient.end();
+        ok(`Created application database "${dbName}"`);
+        return dbName;
+      } catch (createErr) {
+        fail(`Could not automatically create database "${dbName}": ${createErr.message}`);
+        console.error(`Please create it manually: psql -U postgres -c "CREATE DATABASE ${dbName};"`);
+        process.exit(1);
+      }
+    } else {
+      fail(`Failed to connect to database "${dbName}": ${err.message}`);
+      process.exit(1);
+    }
+  }
+}
+
+const REQUIRED_TABLES = [
+  "User",
+  "DatabaseConnection",
+  "DatabaseMetadata",
+  "TableMetadata",
+  "ColumnMetadata",
+  "IndexMetadata",
+  "SqlQuery",
+  "QueryFingerprint",
+  "QueryAnalysis",
+  "QueryIssue",
+  "ExecutionPlan",
+  "OptimizationResult",
+  "OptimizationRun",
+  "OptimizationCandidateRecord",
+  "Recommendation",
+  "PerformanceMetric",
+  "HealthScore",
+  "DeadlockLog",
+  "OptimizationDocument",
+  "OptimizationChunk",
+  "QueryHistory",
+  "AuditLog",
+];
+
+async function verifyDatabaseTables(dbUrl) {
+  const client = new Client({ connectionString: dbUrl });
+  try {
+    await client.connect();
+    const res = await client.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';"
+    );
+    await client.end();
+    const existingTables = new Set(res.rows.map((r) => r.table_name));
+
+    const missing = REQUIRED_TABLES.filter((t) => !existingTables.has(t));
+    if (missing.length > 0) {
+      fail(`Database verification failed: missing required table(s): ${missing.join(", ")}`);
+      process.exit(1);
+    }
+    ok(`All ${REQUIRED_TABLES.length} required application tables verified successfully`);
+  } catch (err) {
+    fail(`Failed to verify database tables: ${err.message}`);
+    process.exit(1);
+  }
+}
+
 async function main() {
   step("Checking PostgreSQL connectivity");
   const pg = await checkPostgres();
@@ -135,6 +238,9 @@ ${c.yellow}How to fix on Windows:${c.reset}
     process.exit(1);
   }
   ok(`PostgreSQL reachable at ${pg.host}:${pg.port}`);
+
+  step("Confirming intended application database");
+  await confirmApplicationDatabase(process.env.DATABASE_URL);
 
   step("Checking backend port availability");
   const backendPort = parseInt(process.env.BACKEND_PORT || process.env.PORT || "5001", 10);
@@ -158,16 +264,12 @@ ${c.yellow}How to fix on Windows:${c.reset}
     ok(`Port ${backendPort} is available`);
   }
 
-  step("Ensuring backend/.env exists");
-  if (!fs.existsSync(ENV_BACK)) {
-    if (fs.existsSync(ENV_ROOT)) {
-      fs.copyFileSync(ENV_ROOT, ENV_BACK);
-      ok("Copied root .env to backend/.env");
-    } else {
-      warn("No .env found to copy. Prisma may fail.");
-    }
+  step("Ensuring backend/.env exists and is synchronized");
+  if (fs.existsSync(ENV_ROOT)) {
+    fs.copyFileSync(ENV_ROOT, ENV_BACK);
+    ok("backend/.env synchronized with root .env");
   } else {
-    ok("backend/.env already exists");
+    warn("No root .env found.");
   }
 
   step("Generating Prisma Client");
@@ -192,11 +294,14 @@ ${c.yellow}Common causes:${c.reset}
   }
   ok("Migrations applied");
 
-  step("Seeding default admin user (idempotent - no duplicates)");
+  step("Seeding default admin user & RAG knowledge base (idempotent - no duplicates)");
   const seed = spawnSync("npx", ["ts-node","prisma/seed.ts"],
     { cwd: BACKEND, stdio: "inherit", shell: true, env: process.env });
   if (seed.status !== 0) { fail("Seed failed."); process.exit(1); }
-  ok("Default admin user ready");
+  ok("Default admin user & RAG knowledge base ready");
+
+  step("Verifying required application database tables");
+  await verifyDatabaseTables(process.env.DATABASE_URL);
 
   console.log(`
 ${c.green}${c.bold}===================================================

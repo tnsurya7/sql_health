@@ -59,6 +59,7 @@ export class ConnectionManager {
       }
     } catch (err: any) {
       logger.error("[ConnectionManager] Failed to load connections from database:", err);
+      throw err;
     }
   }
 
