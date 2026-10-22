@@ -20,7 +20,7 @@ export const QueryHistory: React.FC = () => {
       });
       const json = await res.json();
       if (json.success) {
-        setHistory(json.data);
+        setHistory(Array.isArray(json.data) ? json.data : Array.isArray(json.data?.items) ? json.data.items : []);
       }
     } catch (err) {
       console.error(err);

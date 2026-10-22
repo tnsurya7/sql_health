@@ -309,9 +309,9 @@ router.post("/optimize", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/sql/benchmark - Run safe benchmark on SELECT query
+// POST /api/sql/benchmark - Run safe benchmark on SELECT query with optional before/after comparison
 router.post("/benchmark", async (req: Request, res: Response) => {
-  const { sql, connectionId, iterations, maxRows } = req.body;
+  const { sql, compareSql, connectionId, iterations, warmup = true, maxRows } = req.body;
 
   if (!sql) {
     return res.status(400).json({
@@ -333,16 +333,48 @@ router.post("/benchmark", async (req: Request, res: Response) => {
     }
 
     const adapter = connectionManager.getAdapter(targetConnId);
-    const report = await SafeBenchmarkRunner.benchmarkQuery(
-      adapter,
-      sql,
-      "Benchmarked Query",
-      Number(iterations) || 3,
-      Number(maxRows) || 100
-    );
+    const numIterations = Math.min(20, Math.max(1, Number(iterations) || 3));
+    const maxReturnedRows = Number(maxRows) || 100;
+
+    let comparisonResult = null;
+    let report;
+
+    if (compareSql && typeof compareSql === "string" && compareSql.trim()) {
+      comparisonResult = await SafeBenchmarkRunner.compareQueries(
+        adapter,
+        sql,
+        compareSql,
+        numIterations
+      );
+      report = comparisonResult.original;
+
+      // Record performance metric for optimized query
+      await prisma.performanceMetric.create({
+        data: {
+          connectionId: targetConnId || null,
+          label: "Optimized Candidate",
+          minTimeMs: comparisonResult.optimized.minTimeMs,
+          maxTimeMs: comparisonResult.optimized.maxTimeMs,
+          avgTimeMs: comparisonResult.optimized.avgTimeMs,
+          medianTimeMs: comparisonResult.optimized.medianTimeMs,
+          p95TimeMs: comparisonResult.optimized.p95TimeMs,
+          stdDevMs: comparisonResult.optimized.stdDevMs,
+          iterations: comparisonResult.optimized.iterationsCount,
+          rowsProcessed: comparisonResult.optimized.rowsReturned,
+        },
+      }).catch(() => {});
+    } else {
+      report = await SafeBenchmarkRunner.benchmarkQuery(
+        adapter,
+        sql,
+        "Benchmarked Query",
+        numIterations,
+        maxReturnedRows
+      );
+    }
 
     // Record execution latency in QueryFingerprinter and save PerformanceMetric
-    await QueryFingerprinter.recordExecution(sql, report.medianTimeMs, adapter.config.databaseType);
+    await QueryFingerprinter.recordExecution(sql, report.medianTimeMs, adapter.config.databaseType).catch(() => {});
     await prisma.performanceMetric.create({
       data: {
         connectionId: targetConnId || null,
@@ -358,9 +390,16 @@ router.post("/benchmark", async (req: Request, res: Response) => {
       },
     }).catch(() => {});
 
+    const rawTimes = Array.isArray(report.iterations) ? report.iterations.map((it: any) => it.durationMs) : [];
+
     res.status(200).json({
       success: true,
-      data: report,
+      data: {
+        ...report,
+        rawTimes,
+        warmup: Boolean(warmup),
+        comparison: comparisonResult,
+      },
     });
   } catch (error: any) {
     res.status(400).json({

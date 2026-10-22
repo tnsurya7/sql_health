@@ -270,13 +270,20 @@ The confidence value must be between 0 and 1.
         `[GeminiService] Generating optimization candidate using ${modelName}`
       );
 
-      const response = await client.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-        },
-      });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini API call timed out after 6000ms")), 6000)
+      );
+
+      const response = await Promise.race([
+        client.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+          },
+        }),
+        timeoutPromise,
+      ]);
 
       const text = response.text;
 
@@ -426,11 +433,17 @@ ${ragSnippets || "No additional RAG context available."}
 `;
 
     try {
-      const response =
-        await client.models.generateContent({
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini explanation timed out after 6000ms")), 6000)
+      );
+
+      const response = await Promise.race([
+        client.models.generateContent({
           model: modelName,
           contents: prompt,
-        });
+        }),
+        timeoutPromise,
+      ]);
 
       return response.text || null;
     } catch (err: any) {

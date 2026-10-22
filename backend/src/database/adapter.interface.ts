@@ -230,6 +230,7 @@ export interface DatabaseAdapter {
 
   explainQuery(sql: string, analyze?: boolean): Promise<ExplainResult>;
   executeReadOnlyQuery(sql: string, maxRows?: number, timeoutMs?: number): Promise<QueryExecutionResult>;
+  executeDdl?(sql: string): Promise<void>;
 
   getQueryMetrics(): Promise<DatabaseMetrics>;
 }

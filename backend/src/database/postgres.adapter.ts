@@ -414,6 +414,37 @@ export class PostgreSqlAdapter implements DatabaseAdapter {
   public async getFunctions(schema?: string): Promise<FunctionInfo[]> {
     const pool = this.getPool();
     const targetSchema = schema || this.config.schema || "public";
+    try {
+      const pgProcRes = await pool.query(
+        `
+        SELECT 
+          n.nspname AS schema,
+          p.proname AS name,
+          format_type(p.prorettype, NULL) AS return_type,
+          pg_get_functiondef(p.oid) AS definition,
+          l.lanname AS language
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        JOIN pg_language l ON l.oid = p.prolang
+        WHERE n.nspname = $1 AND p.prokind = 'f'
+        ORDER BY p.proname
+        `,
+        [targetSchema]
+      );
+      if (pgProcRes.rows.length > 0) {
+        return pgProcRes.rows.map((r) => ({
+          schema: r.schema,
+          name: r.name,
+          returnType: r.return_type,
+          arguments: "",
+          language: r.language || "plpgsql",
+          definition: r.definition || undefined,
+        }));
+      }
+    } catch {
+      // Fall back to information_schema
+    }
+
     const res = await pool.query(
       `
       SELECT 
@@ -440,10 +471,38 @@ export class PostgreSqlAdapter implements DatabaseAdapter {
       definition: r.definition || undefined,
     }));
   }
-
   public async getProcedures(schema?: string): Promise<ProcedureInfo[]> {
     const pool = this.getPool();
     const targetSchema = schema || this.config.schema || "public";
+    try {
+      const pgProcRes = await pool.query(
+        `
+        SELECT 
+          n.nspname AS schema,
+          p.proname AS name,
+          pg_get_functiondef(p.oid) AS definition,
+          l.lanname AS language
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        JOIN pg_language l ON l.oid = p.prolang
+        WHERE n.nspname = $1 AND p.prokind = 'p'
+        ORDER BY p.proname
+        `,
+        [targetSchema]
+      );
+      if (pgProcRes.rows.length > 0) {
+        return pgProcRes.rows.map((r) => ({
+          schema: r.schema,
+          name: r.name,
+          arguments: "",
+          language: r.language || "plpgsql",
+          definition: r.definition || undefined,
+        }));
+      }
+    } catch {
+      // Fall back to information_schema if pg_get_functiondef is restricted
+    }
+
     const res = await pool.query(
       `
       SELECT 
@@ -849,5 +908,17 @@ export class PostgreSqlAdapter implements DatabaseAdapter {
       deadlockCount: parseInt(row.deadlocks || "0", 10),
       tempBytesWritten: parseInt(row.temp_bytes || "0", 10),
     };
+  }
+
+  public async executeDdl(sql: string): Promise<void> {
+    if (this.config.readOnly) {
+      throw new Error("Cannot execute DDL on read-only connection.");
+    }
+    const cleanSql = sql.trim().replace(/;+$/, "");
+    if (!/^\s*CREATE\s+(UNIQUE\s+)?INDEX\b/i.test(cleanSql)) {
+      throw new Error("Only CREATE INDEX DDL statements are permitted via Index Advisor.");
+    }
+    const pool = this.getPool();
+    await pool.query(cleanSql);
   }
 }

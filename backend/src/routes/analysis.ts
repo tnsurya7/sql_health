@@ -35,11 +35,14 @@ function runStaticCodeCheck(
 }
 
 // ---------------------------------------------------------------------------
+import { ProcedureAnalyzer } from "../services/procedure-analyzer/engine";
+import { connectionManager } from "../database/connection-manager";
+
 // Handlers
 // ---------------------------------------------------------------------------
 
 export const handleAnalyzeProcedure = async (req: AuthenticatedRequest, res: Response) => {
-  const { name, definition } = req.body;
+  const { name, definition, schema } = req.body;
   if (!definition) {
     return res.status(400).json({
       success: false,
@@ -47,53 +50,95 @@ export const handleAnalyzeProcedure = async (req: AuthenticatedRequest, res: Res
     });
   }
 
-  const rules = [
-    {
-      regex: /\bDECLARE\s+\w+\s+CURSOR\b/i,
-      penalty: 15,
-      title: "Cursor usage",
-      category: "Performance",
-      description: "Procedural cursors can be refactored to set-based operations.",
-    },
-    {
-      regex: /\bEXEC(?:UTE)?\s*\(/i,
-      penalty: 20,
-      title: "Dynamic SQL execution",
-      category: "Security",
-      description: "Dynamic SQL poses security and plan cache reuse issues.",
-    },
-    {
-      regex: /\bSELECT\s+\*\b/i,
-      penalty: 10,
-      title: "SELECT * Usage",
-      category: "Performance",
-      description: "Avoid SELECT * in stored procedures to prevent future schema compilation errors.",
-    },
-    {
-      regex: /\bEXCEPTION\b/i,
-      penalty: -5,
-      title: "Good Error Handling",
-      category: "Maintainability",
-      description: "Found EXCEPTION block.",
-    },
-  ];
-
-  const analysis = runStaticCodeCheck(definition, rules);
-
-  res.status(200).json({
-    success: true,
-    data: {
-      name: name || "Unnamed Procedure",
-      scores: {
-        performance: analysis.scorePerf,
-        security: analysis.scoreSec,
-        maintainability: analysis.scoreMaint,
-        overall: analysis.overall,
+  try {
+    const report = ProcedureAnalyzer.analyzeProcedure(definition, name, schema);
+    res.status(200).json({
+      success: true,
+      data: {
+        name: report.procedureName,
+        signature: report.signature,
+        schema: report.schema,
+        language: report.language,
+        linesOfCode: report.linesOfCode,
+        cyclomaticComplexity: report.cyclomaticComplexity,
+        scores: report.scores,
+        summary: report.summary,
+        findings: report.findings,
+        issues: report.findings.map((f) => ({
+          title: f.title,
+          category: f.category,
+          severity: f.severity,
+          description: f.explanation,
+          evidence: f.snippet,
+          recommendation: f.recommendedFix,
+          ruleId: f.ruleId,
+          confidence: f.confidence,
+          whyItMatters: f.whyItMatters,
+          safeExample: f.safeExample,
+          position: f.position,
+        })),
+        recommendations: report.findings.map((f) => f.recommendedFix),
       },
-      issues: analysis.issues,
-      recommendations: analysis.issues.map((i: any) => `Refactor procedure to resolve: ${i.title}`),
-    },
-  });
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: { code: "PROCEDURE_ANALYSIS_ERROR", message: err.message },
+    });
+  }
+};
+
+export const handleGetProcedureQualitySummary = async (req: AuthenticatedRequest, res: Response) => {
+  const connectionId = (req.query.connectionId as string) || connectionManager.getActiveConnectionId();
+
+  if (!connectionId || !connectionManager.isConnected(connectionId)) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        isConnected: false,
+        totalAnalyzed: 0,
+        totalFindings: 0,
+        findingsBySeverity: { critical: 0, high: 0, medium: 0, low: 0 },
+        cleanProceduresCount: 0,
+        requiringReviewCount: 0,
+        highestRiskProcedures: [],
+        procedures: [],
+      },
+    });
+  }
+
+  try {
+    const adapter = connectionManager.getAdapter(connectionId);
+    const procs = await adapter.getProcedures().catch(() => []);
+    const validProcs = procs.filter((p) => Boolean(p.definition));
+
+    const batch = ProcedureAnalyzer.batchAnalyze(
+      validProcs.map((p) => ({
+        name: p.name,
+        definition: p.definition!,
+        schema: p.schema,
+      }))
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isConnected: true,
+        ...batch,
+        procedures: procs.map((p) => ({
+          name: p.name,
+          schema: p.schema,
+          language: p.language,
+          hasDefinition: Boolean(p.definition),
+        })),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: { code: "SUMMARY_FETCH_ERROR", message: err.message },
+    });
+  }
 };
 
 export const handleAnalyzeView = async (req: AuthenticatedRequest, res: Response) => {
@@ -226,6 +271,8 @@ export const handleAnalyzeTrigger = async (req: AuthenticatedRequest, res: Respo
 export const proceduresRouter = Router();
 proceduresRouter.post("/analyze", authMiddleware, handleAnalyzeProcedure);
 proceduresRouter.post("/", authMiddleware, handleAnalyzeProcedure);
+proceduresRouter.get("/summary", authMiddleware, handleGetProcedureQualitySummary);
+proceduresRouter.post("/batch-analyze", authMiddleware, handleGetProcedureQualitySummary);
 
 export const viewsRouter = Router();
 viewsRouter.post("/analyze", authMiddleware, handleAnalyzeView);

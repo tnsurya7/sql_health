@@ -24,7 +24,7 @@ export const RagKnowledgePage: React.FC = () => {
       const res = await fetch("/api/rag/knowledge");
       const json = await res.json();
       if (json.success) {
-        setDocuments(json.data);
+        setDocuments(Array.isArray(json.data) ? json.data : Array.isArray(json.data?.documents) ? json.data.documents : []);
       }
     } catch (err) {
       console.error(err);
@@ -52,7 +52,7 @@ export const RagKnowledgePage: React.FC = () => {
       });
       const json = await res.json();
       if (json.success) {
-        setSearchResults(json.data);
+        setSearchResults(Array.isArray(json.data) ? json.data : []);
       }
     } catch (err) {
       console.error(err);

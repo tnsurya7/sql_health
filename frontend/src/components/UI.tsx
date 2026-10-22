@@ -73,15 +73,30 @@ export const MetricCard: React.FC<{
   subtitle?: string;
   trend?: { value: string; positive: boolean };
   icon?: React.ReactNode;
-}> = ({ title, value, subtitle, trend, icon }) => {
+  onClick?: () => void;
+  clickable?: boolean;
+}> = ({ title, value, subtitle, trend, icon, onClick, clickable }) => {
+  const isClickable = clickable || !!onClick;
   return (
-    <GlassCard className="flex flex-col justify-between">
+    <div
+      onClick={onClick}
+      role={isClickable ? "button" : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      className={`glass-card p-6 shadow-lg shadow-black/20 flex flex-col justify-between transition-all duration-200 ${
+        isClickable
+          ? "cursor-pointer hover:border-cyan-500/50 hover:bg-zinc-800/80 hover:shadow-cyan-500/10 hover:scale-[1.02] active:scale-[0.99] group focus:outline-none focus:ring-1 focus:ring-cyan-400"
+          : ""
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-xs font-medium tracking-wider text-zinc-400 uppercase">{title}</p>
+          <div className="flex items-center gap-1.5">
+            <p className={`text-xs font-medium tracking-wider uppercase transition-colors ${isClickable ? "text-zinc-400 group-hover:text-cyan-400" : "text-zinc-400"}`}>{title}</p>
+            {isClickable && <span className="text-[10px] text-zinc-500 group-hover:text-cyan-400/80 transition-colors">↗</span>}
+          </div>
           <h3 className="text-2xl font-bold text-white mt-2 font-mono">{value}</h3>
         </div>
-        {icon && <div className="p-2 bg-zinc-800/40 rounded-lg text-zinc-400">{icon}</div>}
+        {icon && <div className="p-2 bg-zinc-800/40 rounded-lg text-zinc-400 group-hover:text-white transition-colors">{icon}</div>}
       </div>
       {subtitle && (
         <div className="flex items-center gap-2 mt-4 text-xs">
@@ -93,7 +108,7 @@ export const MetricCard: React.FC<{
           <span className="text-zinc-500">{subtitle}</span>
         </div>
       )}
-    </GlassCard>
+    </div>
   );
 };
 
